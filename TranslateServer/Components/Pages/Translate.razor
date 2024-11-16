@@ -1,0 +1,167 @@
+﻿@page "/translate"
+@using BlazorDownloadFile
+@inject IBlazorDownloadFileService BlazorDownloadFileService;
+@inject HttpClient Http
+
+<h3 class="mb-4">Translate Application</h3>
+<div class="container mt-4">
+    <div class="row">
+        <!-- Dịch văn bản -->
+        <div class="col-md-6">
+            <h4>Translate Text</h4>
+            <textarea class="form-control" @bind="InputText" rows="5" placeholder="Enter text..."></textarea>
+            <label class="form-label mt-2">Source Language:</label>
+            <select class="form-select" @bind="SourceLanguage">
+                @foreach (var lang in Languages)
+                {
+                    <option value="@lang.Code">@lang.Name</option>
+                }
+            </select>
+            <label class="form-label mt-2">Target Language:</label>
+            <select class="form-select" @bind="TargetLanguage">
+                @foreach (var lang in Languages)
+                {
+                    <option value="@lang.Code">@lang.Name</option>
+                }
+            </select>
+            <button class="btn btn-primary mt-3" @onclick="TranslateText">Translate</button>
+            <div class="mt-3">
+                <h5>Translated Result:</h5> <p>@TranslationDuration</p>
+                <textarea class="form-control" readonly rows="5">@TranslatedText</textarea>
+            </div>
+        </div>
+
+        <!-- Dịch file -->
+        <div class="col-md-6">
+            <h4>Translate File</h4>
+            <InputFile OnChange="OnFileChange" />
+            <button class="btn btn-primary mt-3" @onclick="TranslateFile" disabled="!IsFileUploaded">Translate File</button>
+            @if (!string.IsNullOrEmpty(FileResult))
+            {
+                <div class="mt-3">
+                    <h5>Translated File Content:</h5>
+                    <textarea class="form-control" readonly rows="10">@FileResult</textarea>
+                    <button class="btn btn-success mt-3" @onclick="DownloadFile">Download File</button>
+                </div>
+            }
+        </div>
+        <h5>Translation History:</h5>
+        <ul>
+            @foreach (var history in TranslationHistories)
+            {
+                <li>@history.Time: "@history.Input" -> "@history.Output"</li>
+            }
+        </ul>
+    </div>
+</div>
+
+@code {
+    private string InputText;
+    private string TranslatedText;
+    private string SourceLanguage = "en";
+    private string TargetLanguage = "vi";
+    private List<Language> Languages = new();
+    private IBrowserFile? UploadedFile;
+    private string FileResult;
+    private DateTime StartTime;
+    private DateTime EndTime;
+    private List<TranslationHistory> TranslationHistories = new();
+
+    private string TranslationDuration = string.Empty;
+    private bool IsFileUploaded => UploadedFile is not null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Lấy danh sách ngôn ngữ
+        Languages = await Http.GetFromJsonAsync<List<Language>>("https://libretranslate.com/languages") ?? new List<Language>();
+    }
+
+    private async Task TranslateText()
+    {
+        var requestBody = new
+        {
+            q = InputText,
+            source = SourceLanguage,
+            target = TargetLanguage,
+            format = "text"
+        };
+
+        var response = await Http.PostAsJsonAsync("https://libretranslate.com/translate", requestBody);
+        var result = await response.Content.ReadFromJsonAsync<TranslationResult>();
+        EndTime = DateTime.Now;
+        if (response.IsSuccessStatusCode)
+        {
+            TranslatedText = result?.TranslatedText ?? "Translation failed.";
+        }
+        // Lưu lịch sử
+        TranslationHistories.Add(new TranslationHistory
+            {
+                Input = InputText,
+                Output = TranslatedText,
+                Time = DateTime.Now
+            });
+
+        TranslationDuration = $"Translation took {(EndTime - StartTime).TotalMilliseconds} ms.";
+        TranslatedText = result?.TranslatedText ?? string.Empty;
+    }
+
+    private void OnFileChange(InputFileChangeEventArgs e)
+    {
+        UploadedFile = e.File;
+    }
+
+    private async Task TranslateFile()
+    {
+        if (UploadedFile is not null)
+        {
+            // Đọc nội dung file
+            using var stream = UploadedFile.OpenReadStream();
+            using var reader = new StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+
+            // Gửi nội dung file tới API để dịch
+            var requestBody = new
+            {
+                q = content,
+                source = SourceLanguage,
+                target = TargetLanguage,
+                format = "text"
+            };
+
+            var response = await Http.PostAsJsonAsync("https://libretranslate.com/translate", requestBody);
+            var result = await response.Content.ReadFromJsonAsync<TranslationResult>();
+
+            // Lưu kết quả dịch
+            FileResult = result?.TranslatedText ?? string.Empty;
+        }
+    }
+
+    private async Task DownloadFile()
+    {
+        if (!string.IsNullOrEmpty(FileResult))
+        {
+            var fileName = "translated_file.txt";
+            var fileBytes = System.Text.Encoding.UTF8.GetBytes(FileResult);
+
+            await BlazorDownloadFileService.DownloadFile(fileName, fileBytes, "text/plain");
+        }
+    }
+
+    private class TranslationResult
+    {
+        public string TranslatedText { get; set; }
+    }
+
+    private class Language
+    {
+        public string Code { get; set; }
+        public string Name { get; set; }
+    }
+
+    private class TranslationHistory
+    {
+        public string Input { get; set; }
+        public string Output { get; set; }
+        public DateTime Time { get; set; }
+    }
+}
